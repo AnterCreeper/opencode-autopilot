@@ -25,7 +25,7 @@ Tab → build:
   chat.message(agent="build") → deactivate() → 停止拦截，snapshot 保留供审查
 
 退出 opencode:
-  exit/SIGTERM → discardAll() + umount → 自动清理
+  exit/SIGTERM → discardAll() + umount → 自动清理当前 session
 ```
 
 **零 FUSE、零 kernel overlay、零 mount namespace。**
@@ -90,6 +90,8 @@ Tab 切换到 build/plan agent
   cd /root/autopilot
   npm run cleanup              # 交互式选择
   npm run cleanup -- --all     # 清理所有（需二次确认）
+
+> **注意**：进程崩溃或 SIGKILL 后，snapshot 可能残留。这些孤儿 snapshot 不会自动清理，需手动运行 `npm run cleanup`。
 ```
 
 ### 沙箱行为

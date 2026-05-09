@@ -121,32 +121,6 @@ function active(): boolean {
   return Boolean(st?.active)
 }
 
-function cleanupOrphanSnapshots(): void {
-  // Scan for @ap-* snapshots using btrfs subvolume list for precise metadata.
-  // This handles leftovers from SIGKILL or process crashes.
-  try {
-    const output = run("btrfs", ["subvolume", "list", TOP_MNT], { encoding: "utf-8", timeout: 10000 })
-    const lines = output.split("\n").filter(Boolean)
-    for (const line of lines) {
-      const m = line.match(/path\s+(\S+)$/)
-      if (!m) continue
-      const entry = m[1]
-      if (!/^@ap-[a-zA-Z0-9_-]+$/.test(entry)) continue
-      const snapPath = path.join(TOP_MNT, entry)
-      const tracked = Array.from(sessions.values()).some(s => s.snapshotPath === snapPath)
-      if (!tracked) {
-        try {
-          deleteSnapshot(snapPath)
-        } catch {
-          // Best effort: may fail if already deleted or not a subvolume
-        }
-      }
-    }
-  } catch {
-    // Best effort: btrfs list may fail if TOP_MNT not fully ready
-  }
-}
-
 function ensureTopLevel(): void {
   initBtrfs()
   if (topMounted) return
@@ -159,7 +133,6 @@ function ensureTopLevel(): void {
     throw new Error(`Btrfs top-level mount verification failed: expected ${dev}, got ${actual}`)
   }
   topMounted = true
-  cleanupOrphanSnapshots()
   registerCleanup()
 }
 
