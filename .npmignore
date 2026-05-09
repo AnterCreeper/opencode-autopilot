@@ -1,0 +1,21 @@
+# Source and tests
+src/
+scripts/
+coverage/
+**/*.test.ts
+**/*.test.js
+
+# Build artifacts not needed for publish
+dist/**/*.test.*
+
+# Config
+tsconfig.json
+vitest.config.ts
+PLAN.md
+
+# Dependencies
+node_modules/
+
+# Git
+.git/
+.gitignore

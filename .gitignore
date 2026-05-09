@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+.env
+/tmp-autopilot/
+.opencode/node_modules/
+.opencode/package-lock.json
