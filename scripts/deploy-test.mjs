@@ -15,7 +15,7 @@ import { execFileSync } from "child_process"
 import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "fs"
 import * as path from "path"
 
-const TOP_MNT = process.env.AUTOPILOT_TOP_MNT || "/dev/shm/oc-btrfs"
+const SNAPSHOT_DIR = process.env.AUTOPILOT_SNAPSHOT_DIR || "/dev/shm/oc-btrfs"
 const TEST_DIR = "/tmp/oc-ap-deploy-test"
 
 function log(step, status, detail = "") {
@@ -44,7 +44,7 @@ function cleanup() {
       const parts = line.trim().split(/\s+/)
       const name = snapshotName(parts[parts.length - 1])
       if (!name) continue
-      const snapPath = `${TOP_MNT}/${name}`
+      const snapPath = `${SNAPSHOT_DIR}/${name}`
       try { run("btrfs", ["subvolume", "delete", snapPath], { silent: true }) } catch {}
     }
   } catch {}
@@ -124,7 +124,7 @@ async function main() {
   // 4. 父 session — 激活 autopilot
   await plugin["chat.message"]({
     sessionID: "fork-parent",
-    agent: "autopilot",
+    agent: "pilot",
     variant: undefined,
   }, {})
 
@@ -140,7 +140,7 @@ async function main() {
   // 6. fork 子 session
   await plugin["chat.message"]({
     sessionID: "fork-child",
-    agent: "autopilot",
+    agent: "pilot",
     variant: "fork",
   }, {})
   log(++step, "PASS", "fork 子 session 创建成功")
@@ -181,7 +181,7 @@ async function main() {
   const bashOutput = { args: { command: "echo hello" } }
   await plugin["tool.execute.before"](bashTool, bashOutput)
   const wrapped = bashOutput.args.command
-  if (!wrapped.includes("chroot") || !wrapped.includes("base64 -d")) {
+  if (!wrapped.includes("nsenter") || !wrapped.includes("base64 -d")) {
     log(++step, "FAIL", `bash 包装异常: ${wrapped.slice(0, 80)}...`)
     cleanup()
     process.exit(1)
@@ -197,7 +197,7 @@ async function main() {
   const patchTool = { tool: "apply_patch", sessionID: "fork-child", callID: "p1" }
   const patchOutput = { args: { patchText: "*** Begin Patch\n*** Update File: relative-apply-patch.txt\n@@\n-old\n+new\n*** End Patch" } }
   await plugin["tool.execute.before"](patchTool, patchOutput)
-  if (!patchOutput.args.patchText.includes(TOP_MNT) || patchOutput.args.patchText.includes("*** Update File: relative-apply-patch.txt")) {
+  if (!patchOutput.args.patchText.includes(SNAPSHOT_DIR) || patchOutput.args.patchText.includes("*** Update File: relative-apply-patch.txt")) {
     log(++step, "FAIL", `apply_patch 未重定向到 snapshot: ${patchOutput.args.patchText}`)
     cleanup()
     process.exit(1)

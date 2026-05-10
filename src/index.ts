@@ -10,7 +10,7 @@ const AutopilotPlugin: Plugin = async (input) => {
       setSession(msgInput.sessionID)
       setAgent(msgInput.agent || "")
       const st = getState()
-      if (msgInput.agent === "autopilot") {
+      if (msgInput.agent === "pilot") {
         if (!st?.active) {
           let parentSessionId: string | undefined
 

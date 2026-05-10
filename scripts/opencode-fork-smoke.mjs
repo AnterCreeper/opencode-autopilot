@@ -39,14 +39,14 @@ function main() {
   assert(existsSync(path.join(FORK_DIR, "packages/opencode/src/index.ts")), `opencode-fork not found: ${FORK_DIR}`)
 
   const agents = forkOpencode(["agent", "list"], { timeout: 120000 })
-  assert(agents.includes("autopilot (primary)"), "autopilot agent is not registered in opencode-fork")
+  assert(agents.some(a => a.startsWith("pilot")), "pilot agent is not registered in opencode-fork")
 
   try { rmSync(HOST_CHECK_FILE, { force: true }) } catch {}
 
   forkOpencode([
     "run",
     "--agent",
-    "autopilot",
+    "pilot",
     "请只做一件事：使用 bash 写入 /tmp/autopilot-fork-real-host-check.txt，内容为 sandbox-ok，然后回复完成。不要修改其他文件。",
   ], { inherit: true, timeout: 240000 })
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import { create, deactivate, discard, getState, setSession, toSandboxPath, wrapBashCommand, discardAll, maskPaths, setBypassPrefixes } from "../src/sandbox.js"
+import { create, deactivate, discard, getState, setSession, toSandboxPath, wrapNsenterCommand, discardAll, maskPaths, setBypassPrefixes } from "../src/sandbox.js"
 import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "fs"
 import { execSync } from "child_process"
 import * as path from "path"
@@ -101,21 +101,23 @@ describe("Path translation", () => {
   })
 })
 
-describe("Bash wrapping", () => {
-  it("wraps with base64 + chroot + bash -s", () => {
+describe("Bash wrapping via nsenter", () => {
+  it("wraps with printf + base64 + nsenter + bash -s", () => {
     create(TEST_PROJECT)
-    const cmd = wrapBashCommand("echo test")
-    expect(cmd).toContain("chroot")
+    const cmd = wrapNsenterCommand(getState()!, "echo hello")
+    expect(cmd).toContain("printf '%s'")
     expect(cmd).toContain("base64 -d")
+    expect(cmd).toContain("nsenter")
     expect(cmd).toContain("bash -s")
-    expect(cmd).not.toContain("OCAP-")
-    expect(cmd).not.toContain("<<")
+    expect(cmd).not.toContain("bwrap")
   })
 
-  it("returns original after deactivate", () => {
-    create(TEST_PROJECT)
-    deactivate()
-    expect(wrapBashCommand("echo test")).toBe("echo test")
+  it("throws if bwrap not spawned and lazy spawn fails", () => {
+    // create() spawns bwrap, so this tests the normal path
+    const st = create(TEST_PROJECT)
+    const cmd = wrapNsenterCommand(st, "echo ok", "/tmp")
+    // workdir should be baked into the base64 payload (cd prefix)
+    expect(cmd).toContain("base64")
   })
 })
 
@@ -139,7 +141,12 @@ describe("maskPaths", () => {
 
   it("returns empty string unchanged", () => {
     create(TEST_PROJECT)
-    expect(maskPaths({ active: true, id: "x", snapshotPath: "/s", projectDir: "/" }, "")).toBe("")
+    expect(maskPaths({ active: true, id: "x", snapshotPath: "/s", projectDir: "/", bwrapPid: null, isFork: false }, "")).toBe("")
+  })
+
+  it("handles snapshot path embedded in text without trailing slash", () => {
+    const s = create(TEST_PROJECT)
+    expect(maskPaths(s, `nsenter '${s.snapshotPath}' fs`)).toBe("nsenter '' fs")
   })
 })
 

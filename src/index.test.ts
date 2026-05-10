@@ -36,7 +36,7 @@ describe("index.ts — plugin initialization", () => {
 describe("index.ts — chat.message autopilot activation", () => {
   it("creates sandbox when switching to autopilot", async () => {
     const plugin = await AutopilotPlugin({ client: {} as any })
-    const msg = { sessionID: "idx-ses-01", agent: "autopilot", variant: undefined }
+    const msg = { sessionID: "idx-ses-01", agent: "pilot", variant: undefined }
     await (plugin as any)["chat.message"](msg, {})
     const st = getState()
     expect(st?.active).toBe(true)
@@ -45,7 +45,7 @@ describe("index.ts — chat.message autopilot activation", () => {
 
   it("deactivates when switching away from autopilot", async () => {
     const plugin = await AutopilotPlugin({ client: {} as any })
-    const msg1 = { sessionID: "idx-ses-02", agent: "autopilot", variant: undefined }
+    const msg1 = { sessionID: "idx-ses-02", agent: "pilot", variant: undefined }
     await (plugin as any)["chat.message"](msg1, {})
     expect(getState()?.active).toBe(true)
 
@@ -65,7 +65,7 @@ describe("index.ts — fork inheritance", () => {
     const plugin = await AutopilotPlugin({ client: mockClient })
 
     // Parent session
-    const parentMsg = { sessionID: "idx-parent-01", agent: "autopilot", variant: undefined }
+    const parentMsg = { sessionID: "idx-parent-01", agent: "pilot", variant: undefined }
     await (plugin as any)["chat.message"](parentMsg, {})
     const parentState = getState()
     expect(parentState?.active).toBe(true)
@@ -77,7 +77,7 @@ describe("index.ts — fork inheritance", () => {
 
     // Child session (fork)
     setSession("idx-child-01")
-    const childMsg = { sessionID: "idx-child-01", agent: "autopilot", variant: "fork" }
+    const childMsg = { sessionID: "idx-child-01", agent: "pilot", variant: "fork" }
     await (plugin as any)["chat.message"](childMsg, {})
 
     // Verify mock was called
@@ -96,7 +96,7 @@ describe("index.ts — fork inheritance", () => {
       },
     }
     const plugin = await AutopilotPlugin({ client: mockClient })
-    const msg = { sessionID: "idx-fork-fail", agent: "autopilot", variant: "fork" }
+    const msg = { sessionID: "idx-fork-fail", agent: "pilot", variant: "fork" }
     await (plugin as any)["chat.message"](msg, {})
     const st = getState()
     expect(st?.active).toBe(true)
@@ -107,7 +107,7 @@ describe("index.ts — fork inheritance", () => {
 describe("index.ts — compaction.autocontinue", () => {
   it("enables autocontinue when autopilot is active", async () => {
     const plugin = await AutopilotPlugin({ client: {} as any })
-    const msg = { sessionID: "idx-compact-01", agent: "autopilot", variant: undefined }
+    const msg = { sessionID: "idx-compact-01", agent: "pilot", variant: undefined }
     await (plugin as any)["chat.message"](msg, {})
 
     const output = { enabled: false }

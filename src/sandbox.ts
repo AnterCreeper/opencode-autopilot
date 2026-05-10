@@ -1,29 +1,19 @@
 import { mkdirSync, realpathSync } from "fs"
-import { execFileSync } from "child_process"
+import { execFileSync, spawn } from "child_process"
 import * as path from "path"
 
-const TOP_MNT = safeMountPath(process.env.AUTOPILOT_TOP_MNT || "/dev/shm/oc-btrfs")
-const BTRFS_SUBVOLID = safeSubvolId(process.env.AUTOPILOT_BTRFS_SUBVOLID || "5")
+const snapshotDir = validateDir(process.env.AUTOPILOT_SNAPSHOT_DIR || "/dev/shm/oc-btrfs")
 
 let dev: string
 let rootSubvol: string
 let cleanupRegistered = false
 let cleaningUp = false
 
-function safeMountPath(mountPath: string): string {
-  if (!path.isAbsolute(mountPath) || mountPath.includes("\0")) {
-    throw new Error(`Invalid AUTOPILOT_TOP_MNT: ${mountPath}`)
+function validateDir(dir: string): string {
+  if (!path.isAbsolute(dir) || dir.includes("\0")) {
+    throw new Error(`Invalid AUTOPILOT_SNAPSHOT_DIR: ${dir}`)
   }
-  return path.resolve(mountPath)
-}
-
-function safeSubvolId(subvolId: string): number {
-  if (!/^\d+$/.test(subvolId)) throw new Error(`Invalid AUTOPILOT_BTRFS_SUBVOLID: ${subvolId}`)
-  const parsed = Number(subvolId)
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error(`Invalid AUTOPILOT_BTRFS_SUBVOLID: ${subvolId}`)
-  }
-  return parsed
+  return path.resolve(dir)
 }
 
 function run(command: string, args: string[], options: { encoding?: BufferEncoding; silent?: boolean; timeout?: number } = {}): string {
@@ -33,17 +23,6 @@ function run(command: string, args: string[], options: { encoding?: BufferEncodi
     timeout: options.timeout ?? 30000,
   })
   return typeof result === "string" ? result : ""
-}
-
-function isSnapshotPath(snapshotPath: string): boolean {
-  return snapshotPath.startsWith(TOP_MNT + "/@ap-")
-}
-
-function deleteSnapshot(snapshotPath: string): void {
-  if (!isSnapshotPath(snapshotPath)) {
-    throw new Error(`Refusing to delete unexpected snapshot path: ${snapshotPath}`)
-  }
-  try { run("btrfs", ["subvolume", "delete", snapshotPath], { silent: true }) } catch { /* best effort */ }
 }
 
 function initBtrfs(): void {
@@ -64,10 +43,6 @@ function registerCleanup(): void {
     if (cleaningUp) return
     cleaningUp = true
     discardAll()
-    if (topMounted) {
-      try { run("umount", [TOP_MNT], { silent: true }) } catch { /* best effort */ }
-      topMounted = false
-    }
   }
   process.on("exit", cleanup)
   process.on("SIGTERM", () => { cleanup(); process.exit(128 + 15) })
@@ -79,12 +54,14 @@ export interface SandboxState {
   id: string
   snapshotPath: string
   projectDir: string
+  bwrapPid: number | null
+  isFork: boolean
 }
 
 const sessions = new Map<string, SandboxState>()
 let currentSessionId = ""
 let currentAgent = ""
-let topMounted = false
+let mountReady = false
 
 // Store original args per callID so we can restore them in after hook
 const originalArgs = new Map<string, any>()
@@ -123,16 +100,16 @@ function active(): boolean {
 
 function ensureTopLevel(): void {
   initBtrfs()
-  if (topMounted) return
-  try { run("mountpoint", ["-q", TOP_MNT]) } catch {
-    mkdirSync(TOP_MNT, { recursive: true })
-    run("mount", ["-t", "btrfs", "-o", `subvolid=${BTRFS_SUBVOLID}`, dev, TOP_MNT])
+  if (mountReady) return
+  try { run("mountpoint", ["-q", snapshotDir]) } catch {
+    mkdirSync(snapshotDir, { recursive: true })
+    run("mount", ["-t", "btrfs", "-o", "subvolid=5", dev, snapshotDir])
   }
-  const actual = run("findmnt", ["-n", "-o", "SOURCE", TOP_MNT], { encoding: "utf-8" }).trim()
+  const actual = run("findmnt", ["-n", "-o", "SOURCE", snapshotDir], { encoding: "utf-8" }).trim()
   if (!actual.startsWith(dev)) {
-    throw new Error(`Btrfs top-level mount verification failed: expected ${dev}, got ${actual}`)
+    throw new Error(`Btrfs mount verification failed: expected ${dev}, got ${actual}`)
   }
-  topMounted = true
+  mountReady = true
   registerCleanup()
 }
 
@@ -141,26 +118,77 @@ function safePath(id: string): string {
   return id
 }
 
+function buildBwrapArgs(st: SandboxState): string[] {
+  const flags = (process.env.AUTOPILOT_BWRAP_FLAGS ?? "--unshare-pid").split(" ").filter(Boolean)
+  const bindArgs: string[] = []
+  for (const p of bypassPrefixes) {
+    bindArgs.push("--bind", p, p)
+  }
+  const args = ["--bind", st.snapshotPath, "/", ...bindArgs, ...flags]
+  // bwrap 0.11+ with --unshare-pid may need explicit --proc to mount new procfs
+  if (flags.includes("--unshare-pid") && !flags.includes("--proc")) {
+    args.push("--proc", "/proc")
+  }
+  if (!flags.some(f => f.startsWith("--dev"))) {
+    args.push("--dev", "/dev")
+  }
+  args.push("/bin/bash", "-c", "while true; do sleep 3600; done")
+  return args
+}
+
+function findBwrapChildPid(parentPid: number): number {
+  const out = run("ps", ["--ppid", String(parentPid), "-o", "pid", "--no-headers"], {
+    encoding: "utf-8",
+    timeout: 5000,
+  })
+  const pids = out.trim().split("\n").map(s => parseInt(s.trim(), 10)).filter(Boolean)
+  if (pids.length > 0) return pids[pids.length - 1]
+  throw new Error("bwrap failed to create sandbox namespace — no child process found")
+}
+
+function spawnBwrap(st: SandboxState): void {
+  const args = buildBwrapArgs(st)
+  const child = spawn("/usr/bin/bwrap", args, { stdio: "ignore", detached: true })
+  child.unref()
+  // Give bwrap time to clone into new namespace
+  try { execFileSync("sleep", ["0.1"], { timeout: 500 }) } catch {}
+  // bwrap parent just waits; the child holds the actual sandbox namespace
+  st.bwrapPid = findBwrapChildPid(child.pid!)
+}
+
+function killBwrap(st: SandboxState): void {
+  if (st.bwrapPid) {
+    try { process.kill(st.bwrapPid, "SIGTERM") } catch {}
+    st.bwrapPid = null
+  }
+}
+
 export function create(projectDir?: string, parentSessionId?: string): SandboxState {
   const existing = sessions.get(currentSessionId)
   // Active → idempotent
   if (existing?.active) return existing
-  // Review → re-activate same snapshot
+  // Review → re-activate same snapshot, but respawn bwrap if needed
   if (existing) {
     existing.active = true
+    if (existing.bwrapPid === null) {
+      spawnBwrap(existing)
+    }
     return existing
   }
+
+  const isFork = parentSessionId !== undefined
 
   ensureTopLevel()
 
   const id = safePath(currentSessionId)
-  const snapshotPath = path.join(TOP_MNT, `@ap-${id}`)
+  const snapshotPath = path.join(snapshotDir, `@ap-${id}`)
   const resolvedProject = projectDir || process.cwd()
 
   // If process restarted but snapshot still on disk, reuse it
   if (dirExists(snapshotPath)) {
-    const st: SandboxState = { active: true, id, snapshotPath, projectDir: resolvedProject }
+    const st: SandboxState = { active: true, id, snapshotPath, projectDir: resolvedProject, bwrapPid: null, isFork }
     sessions.set(currentSessionId, st)
+    spawnBwrap(st)
     return st
   }
 
@@ -170,31 +198,25 @@ export function create(projectDir?: string, parentSessionId?: string): SandboxSt
     if (parentState?.snapshotPath) {
       src = parentState.snapshotPath
     } else {
-      // Parent session not tracked by plugin, fallback to root
-      src = path.join(TOP_MNT, rootSubvol)
+      src = path.join(snapshotDir, rootSubvol)
     }
   } else {
-    src = path.join(TOP_MNT, rootSubvol)
+    src = path.join(snapshotDir, rootSubvol)
   }
 
   if (!dirExists(src)) throw new Error(`Btrfs source not found: ${src}`)
 
   run("btrfs", ["subvolume", "snapshot", src, snapshotPath])
 
-  const st: SandboxState = { active: true, id, snapshotPath, projectDir: resolvedProject }
+  const st: SandboxState = { active: true, id, snapshotPath, projectDir: resolvedProject, bwrapPid: null, isFork }
   sessions.set(currentSessionId, st)
+  spawnBwrap(st)
   return st
 }
 
 export function deactivate(): void {
   const st = sessions.get(currentSessionId)
   if (st) st.active = false
-}
-
-function tryUnmount(): void {
-  if (!topMounted || sessions.size > 0) return
-  try { run("umount", [TOP_MNT], { silent: true }) } catch { /* best effort */ }
-  topMounted = false
 }
 
 export function discard(): void {
@@ -204,12 +226,10 @@ export function discard(): void {
 }
 
 export function discardSession(st: SandboxState): void {
-  deleteSnapshot(st.snapshotPath)
-  // Delete by reference to avoid key mismatch
+  killBwrap(st)
   for (const [sid, s] of sessions) {
     if (s === st) { sessions.delete(sid); break }
   }
-  tryUnmount()
 }
 
 export function listSnapshots(): Array<{ id: string; snapshotPath: string; active: boolean }> {
@@ -221,12 +241,10 @@ export function listSnapshots(): Array<{ id: string; snapshotPath: string; activ
 }
 
 export function discardAll(): void {
-  for (const [sid, st] of sessions) {
-    if (!isSnapshotPath(st.snapshotPath)) continue
-    deleteSnapshot(st.snapshotPath)
+  for (const st of sessions.values()) {
+    killBwrap(st)
   }
   sessions.clear()
-  tryUnmount()
 }
 
 let bypassPrefixes: string[] = (() => {
@@ -289,13 +307,22 @@ export function toSandboxPath(original: string): string {
   return resolved
 }
 
-export function wrapBashCommand(command: string): string {
-  if (!active()) return command
-  const st = sessions.get(currentSessionId)!
-  const script = `cd ${JSON.stringify(st.projectDir)}\n${command}`
+export function wrapNsenterCommand(st: SandboxState, command: string, workdir?: string): string {
+  if (st.bwrapPid === null) {
+    spawnBwrap(st)
+  }
+
+  const script = workdir
+    ? `cd ${JSON.stringify(workdir)}\n${command}`
+    : `cd ${JSON.stringify(st.projectDir)}\n${command}`
   const encoded = Buffer.from(script).toString("base64")
-  const safeSnapshotPath = st.snapshotPath.replace(/'/g, "'\\''")
-  return `printf '%s' '${encoded}' | base64 -d | chroot '${safeSnapshotPath}' /bin/bash -s`
+  const flags = process.env.AUTOPILOT_BWRAP_FLAGS ?? "--unshare-pid"
+  const nsFlags = ["-t", String(st.bwrapPid), "-m"]
+  if (flags.includes("--unshare-pid")) {
+    nsFlags.push("-p")
+  }
+  const nsFlagsStr = nsFlags.join(" ")
+  return `printf '%s' '${encoded}' | base64 -d | nsenter ${nsFlagsStr} bash -s`
 }
 
 function dirExists(p: string): boolean {
@@ -307,10 +334,10 @@ const DEBUG_MODE = process.env.AUTOPILOT_DEBUG === "1"
 /**
  * Strip snapshot path prefix from output strings.
  * Agent sees logical paths, not implementation details.
- * Set AUTOPILOT_DEBUG=1 to show raw paths.
+ * Set AUTOPILOT_DEBUG=1 to disable path masking (debug raw paths).
  */
 export function maskPaths(st: SandboxState, text: string): string {
   if (!text || DEBUG_MODE) return text
-  const escaped = st.snapshotPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-  return text.replace(new RegExp(escaped + "/", "g"), "/").replace(new RegExp("^" + escaped + "$"), "")
+  const esc = st.snapshotPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  return text.replace(new RegExp(esc + "/", "g"), "/").replace(new RegExp(esc, "g"), "")
 }

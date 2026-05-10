@@ -1,4 +1,4 @@
-import { create, getAgent, getState, setSession, toSandboxPath, wrapBashCommand, maskPaths, saveOriginalArgs, restoreOriginalArgs } from "./sandbox.js"
+import { create, getAgent, getState, setSession, toSandboxPath, wrapNsenterCommand, maskPaths, saveOriginalArgs, restoreOriginalArgs } from "./sandbox.js"
 
 function isDebugMode(): boolean {
   return process.env.AUTOPILOT_DEBUG === "1"
@@ -68,7 +68,7 @@ export async function onToolExecuteBefore(
 
   const st = getState()
   if (!st?.active) {
-    if (getAgent() === "autopilot") {
+    if (getAgent() === "pilot") {
       create()
     } else {
       return
@@ -83,10 +83,14 @@ export async function onToolExecuteBefore(
   const sandboxArgs = JSON.parse(JSON.stringify(output.args))
 
   switch (input.tool) {
-    case "bash":
-      sandboxArgs.command = wrapBashCommand(sandboxArgs.command)
-      if (sandboxArgs.workdir) sandboxArgs.workdir = toSandboxPath(sandboxArgs.workdir)
+    case "bash": {
+      const activeSt = getState()
+      if (activeSt?.active) {
+        sandboxArgs.command = wrapNsenterCommand(activeSt, sandboxArgs.command, sandboxArgs.workdir)
+        // workdir handled in wrapNsenterCommand (cd prefix); don't rewrite to sandbox path here
+      }
       break
+    }
 
     case "write":
     case "edit":
@@ -131,15 +135,19 @@ export async function onSystemTransform(
 
   const current = st.active
   const last = systemPromptState.get(input.sessionID!)
-  if (last === current) return  // already injected for this state
+  if (last === current) return
 
   if (current) {
-    output.system.push(
-      `[AUTOPILOT ACTIVE] Sandbox active. Do NOT start system services or manage processes. All writes are COW-isolated.`,
-    )
+    const parts = [
+      "[AUTOPILOT ACTIVE] Sandbox active. All writes are COW-isolated. Do NOT start system services (systemd, daemons).",
+    ]
+    if (st.isFork) {
+      parts.push("This is a FORKED session — runs in a separate PID namespace. Background processes from the previous session are not visible. Do NOT attempt to kill or read results from processes started before this fork.")
+    }
+    output.system.push(parts.join(" "))
   } else {
     output.system.push(
-      `[AUTOPILOT REVIEW] Snapshot preserved. Review changes before cleanup.`,
+      "[AUTOPILOT REVIEW] Snapshot preserved. Review changes before cleanup.",
     )
   }
   setSystemPromptState(input.sessionID!, current)

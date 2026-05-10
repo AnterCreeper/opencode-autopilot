@@ -1,38 +1,62 @@
 # opencode-autopilot
 
-OpenCode **自动巡航模式** — Tab 切换到 autopilot agent 即进入全自主 AI 编程沙箱。
+OpenCode **自动巡航模式** — Tab 切换到 Pilot agent 即进入全自主 AI 编程沙箱。
 
 ```
-白天：手动监管 AI 驾驶（build/plan agent）
-夜间：Tab → autopilot → 去睡觉
-醒来：Tab → build → 审查改动 → 手动合入
+白天：手动监管 AI 驾驶（Build/Plan agent）
+夜间：Tab → Pilot → 去睡觉
+醒来：Tab → Build → 审查改动 → 手动合入
 ```
 
 ---
 
 ## 核心机制
 
-基于 **btrfs subvolume snapshot** 的块级 COW 全系统隔离：
+基于 **btrfs subvolume snapshot** 的块级 COW + **bwrap namespace** 隔离：
 
 ```
-Tab → autopilot:
-  chat.message(agent="autopilot") → create() → btrfs snapshot @rootfs → @ap-<id>
-  → snapshot 是完整根文件系统的瞬时可写副本
-  → 所有工具调用自动重定向到 snapshot
-  → bash 命令在 chroot 环境中执行
+Tab → Pilot:
+  chat.message(agent="pilot") → create() → btrfs snapshot @rootfs → @ap-<id>
+  → spawn bwrap（常驻后台 bash，mount namespace 挂载 snapshot 为 /）
+  → 切换后再次进入 Pilot：复用已有 snapshot 和 bwrap，不重建
 
-Tab → build:
-  chat.message(agent="build") → deactivate() → 停止拦截，snapshot 保留供审查
+Tab → Build:
+  chat.message(agent="build") → deactivate() → 停止拦截，bwrap 继续跑
 
 退出 opencode:
-  exit/SIGTERM → discardAll() + umount → 自动清理当前 session
+  exit/SIGTERM → sessions.clear() → bwrap 随进程退出
+  → snapshot 保留，手动 npm run cleanup
 ```
-
-**零 FUSE、零 kernel overlay、零 mount namespace。**
 
 ---
 
 ## 安装
+
+### 1. 编译 patched opencode
+
+本插件依赖对 opencode 的三处内部修正，需从 [antercreeper/opencode](https://github.com/antercreeper/opencode) 编译：
+
+```bash
+git clone https://github.com/antercreeper/opencode /opt/opencode-fork
+cd /opt/opencode-fork
+bun install
+cd packages/opencode
+bun run build -- --single --skip-embed-web-ui
+```
+
+编译产物位于 `dist/opencode-linux-x64/bin/opencode`。
+
+创建启动脚本 `/usr/local/bin/opencode-fork`：
+
+```bash
+cat > /usr/local/bin/opencode-fork << 'EOF'
+#!/bin/sh
+OPENCODE_CONFIG_CONTENT='{"plugin":["/root/autopilot"],"agent":{"pilot":{"mode":"primary","color":"#9D7CD8","permission":{"*":"allow","question":"deny"}}}}' exec /path/to/opencode "$@"
+EOF
+chmod +x /usr/local/bin/opencode-fork
+```
+
+### 2. 安装插件
 
 ```bash
 git clone <repo-url> /root/autopilot
@@ -43,6 +67,7 @@ npm run build
 
 **前置条件**：
 - Linux + btrfs 根文件系统
+- bwrap（bubblewrap）
 - root 权限（opencode 进程需以 root 运行）
 
 ---
@@ -55,8 +80,9 @@ npm run build
 {
   "plugin": ["/root/autopilot"],
   "agent": {
-    "autopilot": {
+    "pilot": {
       "mode": "primary",
+      "color": "#9D7CD8",
       "permission": { "*": "allow", "question": "deny" }
     }
   }
@@ -67,31 +93,30 @@ npm run build
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `AUTOPILOT_TOP_MNT` | `/dev/shm/oc-btrfs` | snapshot 挂载点目录 |
-| `AUTOPILOT_BTRFS_SUBVOLID` | `5` | btrfs 顶层子卷 ID（非标布局时修改） |
-| `AUTOPILOT_DEBUG` | `0` | 设为 `1` 显示原始命令和 snapshot 路径 |
-| `AUTOPILOT_BYPASS_PREFIXES` | `/root/.opencode/` | 逗号分隔的白名单路径前缀，这些路径不进入 snapshot |
+| `AUTOPILOT_SNAPSHOT_DIR` | `/dev/shm/oc-btrfs` | snapshot 存储目录 |
+| `AUTOPILOT_DEBUG` | `0` | 设为 `1` 显示原始 snapshot 路径（调试用） |
+| `AUTOPILOT_BYPASS_PREFIXES` | `/root/.opencode/` | 逗号分隔，bwrap --bind 直通宿主 |
+| `AUTOPILOT_BWRAP_FLAGS` | `--unshare-pid` | 额外 bwrap 隔离选项 |
 
 ---
 
 ## 使用
 
 ```
-Tab 切换到 autopilot agent
+Tab 切换到 Pilot agent
   → 自动创建 btrfs snapshot（如果未创建）
-  → AI 自主工作，所有写入 COW 隔离
-  → 无需 /autopilot on 命令
+  → 启动 bwrap 沙箱环境
 
-Tab 切换到 build/plan agent
+Tab 切换到 Build/Plan agent
   → 停止 sandbox 拦截
+  → bwrap 进程继续运行（不 kill）
   → snapshot 保留供审查
 
 手动清理 snapshot（审查后）:
   cd /root/autopilot
   npm run cleanup              # 交互式选择
   npm run cleanup -- --all     # 清理所有（需二次确认）
-
-> **注意**：进程崩溃或 SIGKILL 后，snapshot 可能残留。这些孤儿 snapshot 不会自动清理，需手动运行 `npm run cleanup`。
+  npm run cleanup -- --session <id>  # 清理指定 session
 ```
 
 ### 沙箱行为
@@ -99,11 +124,9 @@ Tab 切换到 build/plan agent
 | 操作 | 效果 |
 |------|------|
 | `write`/`edit`/`read` | 路径重定向到 snapshot |
-| `apply_patch` | `*** Add/Update/Delete File` 与 diff 路径重定向到 snapshot |
-| `lsp` | 文件路径重定向到 snapshot |
 | `glob`/`grep` | snapshot 内完整文件系统视图 |
-| `bash` | chroot snapshot 内执行，全系统写隔离 |
-| `memory` 路径 | 白名单绕过（`/root/.opencode/`），直写宿主 |
+| `bash` | bwrap 内执行，mount namespace 隔离 |
+| `memory` 路径 | 白名单 `--bind` 直通宿主 |
 | **fork session** | **从父 session snapshot 继承修改** |
 
 ---
@@ -111,11 +134,11 @@ Tab 切换到 build/plan agent
 ## 调试
 
 ```bash
-# 显示原始命令和 snapshot 路径
+# 显示原始 snapshot 路径
 export AUTOPILOT_DEBUG=1
 opencode
 
-# 查看当前 autopilot snapshots
+# 查看所有 snapshot
 btrfs subvolume list / | grep '@ap-'
 ```
 
@@ -125,25 +148,16 @@ btrfs subvolume list / | grep '@ap-'
 
 | 保护 | 机制 |
 |------|------|
-| 误删 root 子卷 | `startsWith(TOP_MNT + "/@ap-")` 路径检查 |
-| 路径注入 | ID 正则 `^[a-zA-Z0-9_-]+$` |
+| 文件系统修改 | btrfs COW snapshot |
+| PID 误杀 | bwrap `--unshare-pid`（默认） |
 | 路径遍历逃逸 | `path.resolve` + `startsWith` 边界校验 |
-| Symlink 逃逸 | 对目标及最近存在父目录做 `realpathSync` 二次验证 |
+| Symlink 逃逸 | `realpathSync` 二次验证 |
 | 设备验证 | `findmnt` 二次确认 |
-| root 检测 | `process.getuid()` 前置拒绝 |
-| 子卷名检测 | 动态 `btrfs subvolume show /` |
-| bash 命令注入 | base64 编码管道，无变量展开 |
-| 内部命令注入 | btrfs/mount 管理命令使用 `execFileSync(command, args)` |
-| Hard link 穿透 | ⚠️ 未防护（见下方限制） |
-| Bind mount 穿透 | ⚠️ 未防护（见下方限制） |
+| 内部命令注入 | `execFileSync(command, args)` |
 
-> **已知限制**：
-> - chroot + root 权限下，AI 理论上可通过 `mknod` 创建设备节点访问物理硬件。
-> - **Hard link 穿透**：AI 可在 snapshot 内创建指向宿主文件系统的 hard link，写入时穿透 COW 隔离。
-> - **Bind mount 穿透**：chroot + root 下可通过 `mount --bind` 将宿主目录挂载进 snapshot，绕过隔离。
-> - **PID / network namespace 共享**：chroot 内的进程与宿主共享 PID 和 network namespace。AI 可能误杀宿主进程或占用宿主机端口。systemd 服务在 chroot 内通常无法通过 `systemctl` 启动（缺少 D-Bus），绕过 systemctl 直接启动则会直接影响宿主。
->
-> 本插件假设 AI 是**可信但可能出错**的协作者，而非完全不可信的隔离目标。如需对抗性隔离，需叠加 mount/pid/network namespace + seccomp-bpf。
+**额外隔离**（通过 `AUTOPILOT_BWRAP_FLAGS` 叠加）：`--unshare-net`、`--unshare-uts`、`--unshare-ipc`。
+
+> **安全边界**：本插件隔离文件系统修改和进程可见性，适用"可信 AI 协作者的隔离执行"。如需对抗性沙箱，需叠加 seccomp-bpf。
 
 ---
 
@@ -151,17 +165,18 @@ btrfs subvolume list / | grep '@ap-'
 
 ```
 autopilot/
-├── .opencode/prompts/autopilot.txt  # autopilot agent 提示词
+├── .opencode/prompts/autopilot.txt  # Pilot agent 提示词
 ├── src/
 │   ├── index.ts                     # 插件入口（fork 检测 + 状态管理）
-│   ├── sandbox.ts                   # btrfs snapshot + 安全校验 + fork 继承
+│   ├── sandbox.ts                   # btrfs snapshot + bwrap 管理
 │   └── hooks.ts                     # tool.execute.before/after 拦截
 ├── scripts/
 │   ├── deploy-test.mjs              # 真实 btrfs 场景测试
-│   └── opencode-fork-smoke.mjs      # opencode-fork 集成烟测
+│   ├── cleanup.mjs                  # 手动 snapshot 清理
+│   └── opencode-fork-smoke.mjs      # 集成烟测
 ├── dist/
 ├── README.md + PLAN.md
-└── tests ✅ (69 tests)
+└── tests ✅ (71 tests)
 ```
 
 ---
@@ -171,8 +186,7 @@ autopilot/
 ```bash
 npm run verify      # typecheck + unit tests + build
 npm run test:real   # 真实 btrfs snapshot/fork/COW 测试
-npm run test:fork   # 通过 /opt/opencode-fork 执行真实 autopilot smoke test
-npm audit           # 依赖漏洞检查，当前应为 0 vulnerabilities
+npm run test:fork   # 通过 /opt/opencode-fork 执行真实 smoke test
 ```
 
 ---
@@ -180,7 +194,7 @@ npm audit           # 依赖漏洞检查，当前应为 0 vulnerabilities
 ## 技术栈
 
 - TypeScript + `@opencode-ai/plugin`
-- btrfs-progs（系统依赖）
+- btrfs-progs + bubblewrap（系统依赖）
 - 需要 root（CAP_SYS_ADMIN）
 
-*版本：v0.2.1*
+*版本：v4.0*

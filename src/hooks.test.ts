@@ -26,15 +26,16 @@ describe("hooks — bash", () => {
     expect(o.args.command).toBe("make")
   })
 
-  it("wraps with base64 + chroot + bash -s", async () => {
+  it("wraps with base64 + nsenter + bash -s", async () => {
     const s = create(TEST_PROJECT)
     const o = { args: { command: "make all" } }
     await onToolExecuteBefore({ tool: "bash", sessionID: TEST_SID, callID: "c1" }, o)
-    expect(o.args.command).toContain("chroot")
+    expect(o.args.command).toContain("nsenter")
     expect(o.args.command).toContain("base64 -d")
     expect(o.args.command).toContain("bash -s")
     expect(o.args.command).not.toContain("OCAP-")
     expect(o.args.command).not.toContain("<<")
+    expect(o.args.command).not.toContain("bwrap")
   })
 
   it("rewrites the original args object in place", async () => {
@@ -43,7 +44,7 @@ describe("hooks — bash", () => {
     const o = { args }
     await onToolExecuteBefore({ tool: "bash", sessionID: TEST_SID, callID: "c-inplace" }, o)
     expect(o.args).toBe(args)
-    expect(args.command).toContain("chroot")
+    expect(args.command).toContain("nsenter")
   })
 })
 
@@ -160,13 +161,13 @@ describe("hooks — after masking", () => {
     const s = create(TEST_PROJECT)
     const beforeOutput = { args: { command: "echo test" } }
     await onToolExecuteBefore({ tool: "bash", sessionID: TEST_SID, callID: "c3" }, beforeOutput)
-    // args were modified by before hook
-    expect(beforeOutput.args.command).toContain("chroot")
+    // args were modified by before hook (printf|base64|nsenter)
+    expect(beforeOutput.args.command).toContain("nsenter")
 
     const afterInput = { tool: "bash", sessionID: TEST_SID, callID: "c3", args: { command: beforeOutput.args.command } }
     const afterOutput = { title: "ok", output: "ok", metadata: {} }
     await onToolExecuteAfter(afterInput, afterOutput)
-    // args restored to original value (no chroot)
+    // args restored to original value
     expect(afterInput.args.command).toBe("echo test")
   })
 })
@@ -203,11 +204,23 @@ describe("hooks — system prompt deduplication", () => {
     await onSystemTransform({ sessionID: TEST_SID }, output1)
     expect(output1.system.length).toBe(1)
     expect(output1.system[0]).toContain("AUTOPILOT ACTIVE")
+    expect(output1.system[0]).toContain("Do NOT start system services")
 
     // Second call with same state — should not inject again
     const output2 = { system: [] }
     await onSystemTransform({ sessionID: TEST_SID }, output2)
     expect(output2.system.length).toBe(0)
+  })
+
+  it("injects fork-specific warning for forked sessions", async () => {
+    const forkSid = "fork-prompt-01"
+    setSession(forkSid)
+    create(TEST_PROJECT, "some-parent")
+    const out = { system: [] }
+    await onSystemTransform({ sessionID: forkSid }, out)
+    expect(out.system[0]).toContain("FORKED")
+    expect(out.system[0]).toContain("previous session")
+    discardAll()
   })
 
   it("re-injects when state changes", async () => {

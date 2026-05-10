@@ -14,16 +14,28 @@
  */
 
 import { execFileSync } from "child_process"
+import { mkdirSync } from "fs"
 import * as readline from "readline"
 import * as path from "path"
 
-const TOP_MNT = safeMountPath(process.env.AUTOPILOT_TOP_MNT || "/dev/shm/oc-btrfs")
+const BASE_PATH = safeMountPath(process.env.AUTOPILOT_SNAPSHOT_DIR || "/dev/shm/oc-btrfs")
 
 function safeMountPath(mountPath) {
   if (!path.isAbsolute(mountPath) || mountPath.includes("\0")) {
-    throw new Error(`Invalid AUTOPILOT_TOP_MNT: ${mountPath}`)
+    throw new Error(`Invalid AUTOPILOT_SNAPSHOT_DIR: ${mountPath}`)
   }
   return path.resolve(mountPath)
+}
+
+function ensureMounted() {
+  try {
+    execFileSync("mountpoint", ["-q", BASE_PATH], { timeout: 10000 })
+  } catch {
+    mkdirSync(BASE_PATH, { recursive: true })
+    const dev = execFileSync("findmnt", ["-n", "-o", "SOURCE", "/"], { encoding: "utf-8", timeout: 10000 }).trim().replace(/\[.*?\]/, "")
+    execFileSync("mount", ["-t", "btrfs", "-o", "subvolid=5", dev, BASE_PATH], { timeout: 10000 })
+    console.log(`✓ 已挂载 btrfs: ${BASE_PATH}`)
+  }
 }
 
 function parseSnapshotName(fullPath) {
@@ -46,7 +58,7 @@ function getSnapshots() {
         return {
           name,
           sessionId,
-          path: `${TOP_MNT}/${name}`,
+          path: `${BASE_PATH}/${name}`,
           id: parts[0], // btrfs subvolume ID
         }
       })
@@ -81,6 +93,7 @@ async function cleanupSession(snapshot, rl) {
   }
   
   try {
+    ensureMounted()
     execFileSync("btrfs", ["subvolume", "delete", snapshot.path], { timeout: 30000 })
     console.log(`✓ 已删除: ${snapshot.name}`)
     return true
@@ -108,6 +121,7 @@ async function cleanupAll(rl, snapshots) {
   
   for (const snapshot of snapshots) {
     try {
+      ensureMounted()
       execFileSync("btrfs", ["subvolume", "delete", snapshot.path], { timeout: 30000 })
       console.log(`✓ 已删除: ${snapshot.name}`)
     } catch (err) {
@@ -196,7 +210,7 @@ Autopilot Snapshot Cleanup
   node scripts/cleanup.mjs --help           显示此帮助
 
 环境变量:
-  AUTOPILOT_TOP_MNT    snapshot 挂载点 (默认: /dev/shm/oc-btrfs)
+  AUTOPILOT_SNAPSHOT_DIR    snapshot 目录 (默认: /dev/shm/oc-btrfs)
 `)
     return
   }

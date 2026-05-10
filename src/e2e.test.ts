@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import { create, discardAll, setSession, wrapBashCommand, saveOriginalArgs, restoreOriginalArgs } from "../src/sandbox.js"
+import { create, discardAll, setSession, wrapNsenterCommand, getState, saveOriginalArgs, restoreOriginalArgs } from "../src/sandbox.js"
 
 const TEST_SID = "e2e-001"
 const TEST_PROJECT = "/tmp/oc-ap-e2e"
@@ -13,21 +13,19 @@ afterEach(() => {
   discardAll()
 })
 
-describe("e2e — wrapBashCommand escaping", () => {
-  it("uses printf instead of echo and quotes snapshot path", () => {
-    create(TEST_PROJECT)
-    const wrapped = wrapBashCommand("echo test")
-    expect(wrapped).toContain("printf '%s'")
-    expect(wrapped).not.toContain("echo '")
-    expect(wrapped).toContain("chroot '")
-    expect(wrapped).toContain("' /bin/bash -s")
+describe("e2e — wrapNsenterCommand", () => {
+  it("generates nsenter pipeline string", () => {
+    const st = create(TEST_PROJECT)
+    const cmd = wrapNsenterCommand(st, "echo nsenter_works")
+    expect(cmd).toContain("nsenter")
+    expect(cmd).toContain("base64 -d")
+    expect(cmd).toContain("bash -s")
   })
 })
 
 describe("e2e — originalArgs leak prevention", () => {
   it("does not throw when exceeding 1000 entries", () => {
     create(TEST_PROJECT)
-    // Fill beyond limit — should silently drop oldest
     for (let i = 0; i < 1005; i++) {
       saveOriginalArgs(`call-${i}`, { cmd: "test" })
     }
