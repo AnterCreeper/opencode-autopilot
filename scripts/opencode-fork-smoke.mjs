@@ -39,7 +39,8 @@ function main() {
   assert(existsSync(path.join(FORK_DIR, "packages/opencode/src/index.ts")), `opencode-fork not found: ${FORK_DIR}`)
 
   const agents = forkOpencode(["agent", "list"], { timeout: 120000 })
-  assert(agents.some(a => a.startsWith("pilot")), "pilot agent is not registered in opencode-fork")
+  const hasPilotAgent = agents.split(/\r?\n/).some(line => line.trim().startsWith("pilot"))
+  assert(hasPilotAgent, "pilot agent is not registered in opencode-fork")
 
   try { rmSync(HOST_CHECK_FILE, { force: true }) } catch {}
 

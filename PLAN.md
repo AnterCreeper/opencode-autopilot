@@ -103,7 +103,7 @@ Fork → Session B:
 | 非 root 执行 | `process.getuid()` 前置拒绝 |
 | 内部命令拼接 | `execFileSync(command, args)` |
 
-**额外隔离选项**（通过 `AUTOPILOT_BWRAP_FLAGS`）：
+**bwrap flags**（通过 `AUTOPILOT_BWRAP_FLAGS` 完整覆盖，默认 `--unshare-pid`）：
 
 | flag | 效果 |
 |------|------|
@@ -145,7 +145,7 @@ export AUTOPILOT_SNAPSHOT_DIR=/dev/shm/oc-btrfs
 # bypass 白名单（逗号分隔）—— bwrap --bind 直通宿主机
 export AUTOPILOT_BYPASS_PREFIXES=/root/.opencode/
 
-# bwrap 额外隔离选项
+# bwrap flags（完整覆盖默认值；保留 --unshare-pid 才启用 PID 隔离）
 export AUTOPILOT_BWRAP_FLAGS="--unshare-pid --unshare-net"
 
 # 调试模式（显示原始路径）

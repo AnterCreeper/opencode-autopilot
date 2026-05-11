@@ -1,4 +1,4 @@
-import { create, getAgent, getState, setSession, toSandboxPath, wrapNsenterCommand, maskPaths, saveOriginalArgs, restoreOriginalArgs } from "./sandbox.js"
+import { create, getAgent, getState, setSession, toSandboxPath, wrapNsenterCommand, maskPaths, saveOriginalArgs, restoreOriginalArgs, ensureSandboxHealthy } from "./sandbox.js"
 
 function isDebugMode(): boolean {
   return process.env.AUTOPILOT_DEBUG === "1"
@@ -75,6 +75,9 @@ export async function onToolExecuteBefore(
     }
   }
 
+  const activeSt = getState()
+  if (activeSt?.active) ensureSandboxHealthy(activeSt)
+
   // Save original args for restoration in after hook (transcript cleanliness)
   saveOriginalArgs(input.callID, output.args)
 
@@ -84,9 +87,9 @@ export async function onToolExecuteBefore(
 
   switch (input.tool) {
     case "bash": {
-      const activeSt = getState()
-      if (activeSt?.active) {
-        sandboxArgs.command = wrapNsenterCommand(activeSt, sandboxArgs.command, sandboxArgs.workdir)
+      const bashSt = getState()
+      if (bashSt?.active) {
+        sandboxArgs.command = wrapNsenterCommand(bashSt, sandboxArgs.command, sandboxArgs.workdir)
         // workdir handled in wrapNsenterCommand (cd prefix); don't rewrite to sandbox path here
       }
       break

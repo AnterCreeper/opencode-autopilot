@@ -57,6 +57,25 @@ describe("hooks — filePath tools", () => {
       expect(o.args.filePath).toBe(path.join(s.snapshotPath, "/etc/hosts"))
     })
   }
+
+  it("fails closed before file tools when sandbox health check fails", async () => {
+    const originalFlags = process.env.AUTOPILOT_BWRAP_FLAGS
+    const s = create(TEST_PROJECT)
+    if (s.bwrapPid) process.kill(s.bwrapPid, "SIGTERM")
+    s.bwrapPid = null
+    try {
+      process.env.AUTOPILOT_BWRAP_FLAGS = "--invalid-autopilot-test-flag"
+
+      const o = { args: { filePath: "/etc/hosts" } }
+      await expect(onToolExecuteBefore({ tool: "write", sessionID: TEST_SID, callID: "c-health" }, o)).rejects.toThrow("AUTOPILOT SANDBOX FAILED")
+    } finally {
+      if (originalFlags === undefined) {
+        delete process.env.AUTOPILOT_BWRAP_FLAGS
+      } else {
+        process.env.AUTOPILOT_BWRAP_FLAGS = originalFlags
+      }
+    }
+  })
 })
 
 describe("hooks — glob/grep", () => {

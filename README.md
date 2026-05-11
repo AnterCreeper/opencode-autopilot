@@ -96,7 +96,7 @@ npm run build
 | `AUTOPILOT_SNAPSHOT_DIR` | `/dev/shm/oc-btrfs` | snapshot 存储目录 |
 | `AUTOPILOT_DEBUG` | `0` | 设为 `1` 显示原始 snapshot 路径（调试用） |
 | `AUTOPILOT_BYPASS_PREFIXES` | `/root/.opencode/` | 逗号分隔，bwrap --bind 直通宿主 |
-| `AUTOPILOT_BWRAP_FLAGS` | `--unshare-pid` | 额外 bwrap 隔离选项 |
+| `AUTOPILOT_BWRAP_FLAGS` | `--unshare-pid` | 完整覆盖 bwrap flags；可通过不包含 `--unshare-pid` 来关闭 PID 隔离 |
 
 ---
 
@@ -118,6 +118,8 @@ Tab 切换到 Build/Plan agent
   npm run cleanup -- --all     # 清理所有（需二次确认）
   npm run cleanup -- --session <id>  # 清理指定 session
 ```
+
+如果 bwrap/sandbox 启动或健康检查失败，Pilot 会拒绝继续执行工具，不会自动降级到宿主机执行。用户需要先处理失败原因，再决定重试、切换 agent 或清理 snapshot。失败时已经创建的 snapshot 可能保留，可通过 `npm run cleanup` 清理。
 
 ### 沙箱行为
 
@@ -155,7 +157,7 @@ btrfs subvolume list / | grep '@ap-'
 | 设备验证 | `findmnt` 二次确认 |
 | 内部命令注入 | `execFileSync(command, args)` |
 
-**额外隔离**（通过 `AUTOPILOT_BWRAP_FLAGS` 叠加）：`--unshare-net`、`--unshare-uts`、`--unshare-ipc`。
+**bwrap flags** 可通过 `AUTOPILOT_BWRAP_FLAGS` 完整覆盖。默认值为 `--unshare-pid`；例如 `--unshare-pid --unshare-net` 会同时启用 PID 和网络隔离，`--unshare-net` 则只启用网络隔离。
 
 > **安全边界**：本插件隔离文件系统修改和进程可见性，适用"可信 AI 协作者的隔离执行"。如需对抗性沙箱，需叠加 seccomp-bpf。
 

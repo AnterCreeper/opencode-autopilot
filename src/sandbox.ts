@@ -3,6 +3,8 @@ import { execFileSync, spawn } from "child_process"
 import * as path from "path"
 
 const snapshotDir = validateDir(process.env.AUTOPILOT_SNAPSHOT_DIR || "/dev/shm/oc-btrfs")
+const BWRAP_READY_TIMEOUT_MS = 2000
+const BWRAP_READY_POLL_MS = 50
 
 let dev: string
 let rootSubvol: string
@@ -23,6 +25,10 @@ function run(command: string, args: string[], options: { encoding?: BufferEncodi
     timeout: options.timeout ?? 30000,
   })
   return typeof result === "string" ? result : ""
+}
+
+function sleepMs(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
 function initBtrfs(): void {
@@ -118,15 +124,23 @@ function safePath(id: string): string {
   return id
 }
 
+function getBwrapFlags(): string[] {
+  return (process.env.AUTOPILOT_BWRAP_FLAGS ?? "--unshare-pid").split(" ").filter(Boolean)
+}
+
+function usesPidNamespace(flags: string[]): boolean {
+  return flags.includes("--unshare-pid") || flags.includes("--unshare-all")
+}
+
 function buildBwrapArgs(st: SandboxState): string[] {
-  const flags = (process.env.AUTOPILOT_BWRAP_FLAGS ?? "--unshare-pid").split(" ").filter(Boolean)
+  const flags = getBwrapFlags()
   const bindArgs: string[] = []
   for (const p of bypassPrefixes) {
     bindArgs.push("--bind", p, p)
   }
   const args = ["--bind", st.snapshotPath, "/", ...bindArgs, ...flags]
   // bwrap 0.11+ with --unshare-pid may need explicit --proc to mount new procfs
-  if (flags.includes("--unshare-pid") && !flags.includes("--proc")) {
+  if (usesPidNamespace(flags) && !flags.includes("--proc")) {
     args.push("--proc", "/proc")
   }
   if (!flags.some(f => f.startsWith("--dev"))) {
@@ -136,24 +150,79 @@ function buildBwrapArgs(st: SandboxState): string[] {
   return args
 }
 
-function findBwrapChildPid(parentPid: number): number {
+function findBwrapChildPid(parentPid: number): number | undefined {
   const out = run("ps", ["--ppid", String(parentPid), "-o", "pid", "--no-headers"], {
     encoding: "utf-8",
     timeout: 5000,
   })
   const pids = out.trim().split("\n").map(s => parseInt(s.trim(), 10)).filter(Boolean)
   if (pids.length > 0) return pids[pids.length - 1]
-  throw new Error("bwrap failed to create sandbox namespace — no child process found")
+  return undefined
+}
+
+function isPidAlive(pid: number | null): boolean {
+  if (!pid) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function formatBwrapError(st: SandboxState, parentPid: number | undefined, args: string[], cause: string): Error {
+  return new Error(
+    [
+      "AUTOPILOT SANDBOX FAILED: bwrap namespace holder is not available.",
+      `Cause: ${cause}`,
+      `Session: ${st.id}`,
+      `Snapshot: ${st.snapshotPath}`,
+      `bwrap parent pid: ${parentPid ?? "unknown"}`,
+      `bwrap flags: ${getBwrapFlags().join(" ") || "(none)"}`,
+      `bwrap args: ${args.join(" ")}`,
+      "Refusing to run tools outside the sandbox.",
+    ].join("\n"),
+  )
 }
 
 function spawnBwrap(st: SandboxState): void {
   const args = buildBwrapArgs(st)
   const child = spawn("/usr/bin/bwrap", args, { stdio: "ignore", detached: true })
+  let spawnError = ""
+  child.on("error", err => {
+    spawnError = err.message
+  })
   child.unref()
-  // Give bwrap time to clone into new namespace
-  try { execFileSync("sleep", ["0.1"], { timeout: 500 }) } catch {}
-  // bwrap parent just waits; the child holds the actual sandbox namespace
-  st.bwrapPid = findBwrapChildPid(child.pid!)
+  const parentPid = child.pid
+  if (!parentPid) {
+    throw formatBwrapError(st, parentPid, args, "failed to start bwrap process")
+  }
+  const deadline = Date.now() + BWRAP_READY_TIMEOUT_MS
+  let lastError = ""
+
+  while (Date.now() < deadline) {
+    try {
+      if (!isPidAlive(parentPid)) {
+        lastError = "bwrap parent exited before creating namespace holder"
+        break
+      }
+      const childPid = findBwrapChildPid(parentPid)
+      if (childPid && isPidAlive(childPid)) {
+        st.bwrapPid = childPid
+        return
+      }
+    } catch (err: any) {
+      lastError = err?.message || String(err)
+    }
+    if (spawnError) {
+      lastError = spawnError
+      break
+    }
+    sleepMs(BWRAP_READY_POLL_MS)
+  }
+
+  st.bwrapPid = null
+  throw formatBwrapError(st, parentPid, args, lastError || "timed out waiting for namespace holder")
 }
 
 function killBwrap(st: SandboxState): void {
@@ -170,8 +239,11 @@ export function create(projectDir?: string, parentSessionId?: string): SandboxSt
   // Review → re-activate same snapshot, but respawn bwrap if needed
   if (existing) {
     existing.active = true
-    if (existing.bwrapPid === null) {
-      spawnBwrap(existing)
+    try {
+      ensureSandboxHealthy(existing)
+    } catch (err) {
+      existing.active = false
+      throw err
     }
     return existing
   }
@@ -188,7 +260,12 @@ export function create(projectDir?: string, parentSessionId?: string): SandboxSt
   if (dirExists(snapshotPath)) {
     const st: SandboxState = { active: true, id, snapshotPath, projectDir: resolvedProject, bwrapPid: null, isFork }
     sessions.set(currentSessionId, st)
-    spawnBwrap(st)
+    try {
+      spawnBwrap(st)
+    } catch (err) {
+      sessions.delete(currentSessionId)
+      throw err
+    }
     return st
   }
 
@@ -210,7 +287,12 @@ export function create(projectDir?: string, parentSessionId?: string): SandboxSt
 
   const st: SandboxState = { active: true, id, snapshotPath, projectDir: resolvedProject, bwrapPid: null, isFork }
   sessions.set(currentSessionId, st)
-  spawnBwrap(st)
+  try {
+    spawnBwrap(st)
+  } catch (err) {
+    sessions.delete(currentSessionId)
+    throw err
+  }
   return st
 }
 
@@ -245,6 +327,13 @@ export function discardAll(): void {
     killBwrap(st)
   }
   sessions.clear()
+}
+
+export function ensureSandboxHealthy(st: SandboxState): void {
+  if (!st.active) return
+  if (isPidAlive(st.bwrapPid)) return
+  st.bwrapPid = null
+  spawnBwrap(st)
 }
 
 let bypassPrefixes: string[] = (() => {
@@ -308,17 +397,15 @@ export function toSandboxPath(original: string): string {
 }
 
 export function wrapNsenterCommand(st: SandboxState, command: string, workdir?: string): string {
-  if (st.bwrapPid === null) {
-    spawnBwrap(st)
-  }
+  ensureSandboxHealthy(st)
 
   const script = workdir
     ? `cd ${JSON.stringify(workdir)}\n${command}`
     : `cd ${JSON.stringify(st.projectDir)}\n${command}`
   const encoded = Buffer.from(script).toString("base64")
-  const flags = process.env.AUTOPILOT_BWRAP_FLAGS ?? "--unshare-pid"
+  const flags = getBwrapFlags()
   const nsFlags = ["-t", String(st.bwrapPid), "-m"]
-  if (flags.includes("--unshare-pid")) {
+  if (usesPidNamespace(flags)) {
     nsFlags.push("-p")
   }
   const nsFlagsStr = nsFlags.join(" ")

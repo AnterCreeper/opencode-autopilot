@@ -1,11 +1,22 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { create, deactivate, discard, getState, setSession, toSandboxPath, wrapNsenterCommand, discardAll, maskPaths, setBypassPrefixes } from "../src/sandbox.js"
 import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "fs"
-import { execSync } from "child_process"
+import { execFileSync, execSync } from "child_process"
 import * as path from "path"
 
 const TEST_SID = "test-001"
 const TEST_PROJECT = "/root/oc-ap-test"
+
+function waitForPidExit(pid: number): void {
+  for (let i = 0; i < 20; i++) {
+    try {
+      process.kill(pid, 0)
+    } catch {
+      return
+    }
+    try { execFileSync("sleep", ["0.05"], { timeout: 200 }) } catch {}
+  }
+}
 
 beforeEach(() => {
   discardAll()
@@ -102,6 +113,16 @@ describe("Path translation", () => {
 })
 
 describe("Bash wrapping via nsenter", () => {
+  const ORIGINAL_BWRAP_FLAGS = process.env.AUTOPILOT_BWRAP_FLAGS
+
+  afterEach(() => {
+    if (ORIGINAL_BWRAP_FLAGS === undefined) {
+      delete process.env.AUTOPILOT_BWRAP_FLAGS
+    } else {
+      process.env.AUTOPILOT_BWRAP_FLAGS = ORIGINAL_BWRAP_FLAGS
+    }
+  })
+
   it("wraps with printf + base64 + nsenter + bash -s", () => {
     create(TEST_PROJECT)
     const cmd = wrapNsenterCommand(getState()!, "echo hello")
@@ -118,6 +139,41 @@ describe("Bash wrapping via nsenter", () => {
     const cmd = wrapNsenterCommand(st, "echo ok", "/tmp")
     // workdir should be baked into the base64 payload (cd prefix)
     expect(cmd).toContain("base64")
+  })
+
+  it("allows custom bwrap flags to disable pid namespace", () => {
+    process.env.AUTOPILOT_BWRAP_FLAGS = "--unshare-net"
+    create(TEST_PROJECT)
+    const cmd = wrapNsenterCommand(getState()!, "echo ok")
+    expect(cmd).toContain("nsenter -t")
+    expect(cmd).not.toContain(" -m -p ")
+  })
+
+  it("enters pid namespace when bwrap uses --unshare-all", () => {
+    process.env.AUTOPILOT_BWRAP_FLAGS = "--unshare-all"
+    create(TEST_PROJECT)
+    const cmd = wrapNsenterCommand(getState()!, "echo ok")
+    expect(cmd).toContain(" -m -p ")
+  })
+
+  it("fails closed and clears state when bwrap cannot start", () => {
+    process.env.AUTOPILOT_BWRAP_FLAGS = "--invalid-autopilot-test-flag"
+    expect(() => create(TEST_PROJECT)).toThrow("AUTOPILOT SANDBOX FAILED")
+    expect(getState()).toBeUndefined()
+  })
+
+  it("respawns the namespace holder before generating nsenter commands", () => {
+    const st = create(TEST_PROJECT)
+    const oldPid = st.bwrapPid
+    expect(oldPid).toBeTruthy()
+    process.kill(oldPid!, "SIGKILL")
+    waitForPidExit(oldPid!)
+    st.bwrapPid = oldPid
+
+    const cmd = wrapNsenterCommand(st, "echo ok")
+    expect(st.bwrapPid).toBeTruthy()
+    expect(st.bwrapPid).not.toBe(oldPid)
+    expect(cmd).toContain(`nsenter -t ${st.bwrapPid}`)
   })
 })
 
