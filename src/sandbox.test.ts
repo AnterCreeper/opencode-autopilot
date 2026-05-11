@@ -98,7 +98,7 @@ describe("Path translation", () => {
 
   it("bypasses memory", () => {
     create(TEST_PROJECT)
-    expect(toSandboxPath("/root/.opencode/soul/memory/x.md")).toBe("/root/.opencode/soul/memory/x.md")
+    expect(toSandboxPath(`${process.env.HOME}/.opencode/soul/memory/x.md`)).toBe(`${process.env.HOME}/.opencode/soul/memory/x.md`)
   })
 
   it("passes through when inactive", () => {
@@ -234,12 +234,12 @@ describe("Relative path handling", () => {
 
 describe("bypass configuration", () => {
   afterEach(() => {
-    setBypassPrefixes(["/root/.opencode/"])
+    setBypassPrefixes([`${process.env.HOME}/.opencode/`])
   })
 
-  it("default bypasses /root/.opencode/", () => {
+  it("default bypasses ~/.opencode/", () => {
     create(TEST_PROJECT)
-    expect(toSandboxPath("/root/.opencode/soul/x.md")).toBe("/root/.opencode/soul/x.md")
+    expect(toSandboxPath(`${process.env.HOME}/.opencode/soul/x.md`)).toBe(`${process.env.HOME}/.opencode/soul/x.md`)
   })
 
   it("does not bypass /home/ by default", () => {
@@ -248,7 +248,7 @@ describe("bypass configuration", () => {
   })
 
   it("custom bypass prefixes", () => {
-    setBypassPrefixes(["/root/.opencode/", "/proc/"])
+    setBypassPrefixes([`${process.env.HOME}/.opencode/`, "/proc/"])
     create(TEST_PROJECT)
     expect(toSandboxPath("/proc/cpuinfo")).toBe("/proc/cpuinfo")
     expect(toSandboxPath("/etc/hosts")).not.toBe("/etc/hosts")

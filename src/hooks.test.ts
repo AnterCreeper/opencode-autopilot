@@ -132,9 +132,9 @@ describe("hooks — apply_patch", () => {
 describe("hooks — memory bypass", () => {
   it("does not redirect memory paths", async () => {
     create(TEST_PROJECT)
-    const o = { args: { filePath: "/root/.opencode/soul/memory/x.md" } }
+    const o = { args: { filePath: `${process.env.HOME}/.opencode/soul/memory/x.md` } }
     await onToolExecuteBefore({ tool: "write", sessionID: TEST_SID, callID: "c1" }, o)
-    expect(o.args.filePath).toBe("/root/.opencode/soul/memory/x.md")
+    expect(o.args.filePath).toBe(`${process.env.HOME}/.opencode/soul/memory/x.md`)
   })
 })
 

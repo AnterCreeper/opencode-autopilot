@@ -3,6 +3,7 @@ import { execFileSync, spawn } from "child_process"
 import * as path from "path"
 
 const snapshotDir = validateDir(process.env.AUTOPILOT_SNAPSHOT_DIR || "/dev/shm/oc-btrfs")
+const HOME = process.env.HOME || "/root"
 const BWRAP_READY_TIMEOUT_MS = 2000
 const BWRAP_READY_POLL_MS = 50
 
@@ -336,10 +337,24 @@ export function ensureSandboxHealthy(st: SandboxState): void {
   spawnBwrap(st)
 }
 
+function detectDnsBypassPrefixes(): string[] {
+  const prefixes: string[] = []
+  try {
+    const resolved = realpathSync("/etc/resolv.conf")
+    if (resolved) prefixes.push(resolved)
+  } catch {
+    // /etc/resolv.conf may not exist or not be readable
+  }
+  return prefixes
+}
+
 let bypassPrefixes: string[] = (() => {
   const env = process.env.AUTOPILOT_BYPASS_PREFIXES
-  if (env) return env.split(",").map(p => p.trim()).filter(Boolean)
-  return ["/root/.opencode/"]
+  const base = env ? env.split(",").map(p => p.trim()).filter(Boolean) : [`${HOME}/.opencode/`]
+  for (const p of detectDnsBypassPrefixes()) {
+    if (!base.includes(p)) base.push(p)
+  }
+  return base
 })()
 
 export function setBypassPrefixes(prefixes: string[]): void {
