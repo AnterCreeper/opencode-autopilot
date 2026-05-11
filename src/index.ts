@@ -2,6 +2,13 @@ import type { Plugin } from "@opencode-ai/plugin"
 import { create, deactivate, getState, setSession, setAgent } from "./sandbox.js"
 import { onToolExecuteBefore, onToolExecuteAfter, onShellEnv, onSystemTransform } from "./hooks.js"
 
+if (process.platform !== "linux") {
+  throw new Error(
+    `opencode-autopilot requires Linux (got ${process.platform}). ` +
+    `This plugin uses btrfs and bubblewrap which are Linux-only.`
+  )
+}
+
 const AutopilotPlugin: Plugin = async (input) => {
   const client = input.client
 

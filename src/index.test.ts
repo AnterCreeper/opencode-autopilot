@@ -1,15 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import AutopilotPlugin from "../src/index.js"
 import { discardAll, setSession, getState } from "../src/sandbox.js"
-import { existsSync, mkdirSync, writeFileSync, rmSync } from "fs"
+import { existsSync, mkdirSync, writeFileSync, rmSync, mkdtempSync } from "fs"
 import * as path from "path"
+import * as os from "os"
 
-const TEST_PROJECT = "/tmp/oc-ap-index-test"
+let TEST_PROJECT = ""
+
+function makeSid(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+}
 
 beforeEach(() => {
   discardAll()
-  if (existsSync(TEST_PROJECT)) rmSync(TEST_PROJECT, { recursive: true, force: true })
-  mkdirSync(TEST_PROJECT, { recursive: true })
+  TEST_PROJECT = mkdtempSync(path.join(os.tmpdir(), "oc-ap-index-test-"))
 })
 
 afterEach(() => {
@@ -36,7 +40,7 @@ describe("index.ts — plugin initialization", () => {
 describe("index.ts — chat.message autopilot activation", () => {
   it("creates sandbox when switching to autopilot", async () => {
     const plugin = await AutopilotPlugin({ client: {} as any })
-    const msg = { sessionID: "idx-ses-01", agent: "pilot", variant: undefined }
+    const msg = { sessionID: makeSid("idx-ses"), agent: "pilot", variant: undefined }
     await (plugin as any)["chat.message"](msg, {})
     const st = getState()
     expect(st?.active).toBe(true)
@@ -45,11 +49,12 @@ describe("index.ts — chat.message autopilot activation", () => {
 
   it("deactivates when switching away from autopilot", async () => {
     const plugin = await AutopilotPlugin({ client: {} as any })
-    const msg1 = { sessionID: "idx-ses-02", agent: "pilot", variant: undefined }
+    const sid = makeSid("idx-ses")
+    const msg1 = { sessionID: sid, agent: "pilot", variant: undefined }
     await (plugin as any)["chat.message"](msg1, {})
     expect(getState()?.active).toBe(true)
 
-    const msg2 = { sessionID: "idx-ses-02", agent: "build", variant: undefined }
+    const msg2 = { sessionID: sid, agent: "build", variant: undefined }
     await (plugin as any)["chat.message"](msg2, {})
     expect(getState()?.active).toBe(false)
   })
@@ -57,36 +62,39 @@ describe("index.ts — chat.message autopilot activation", () => {
 
 describe("index.ts — fork inheritance", () => {
   it("detects fork and passes parent session ID", async () => {
+    const parentSid = makeSid("idx-parent")
+    const childSid = makeSid("idx-child")
+
     const mockClient = {
       session: {
-        get: vi.fn().mockResolvedValue({ data: { parentID: "idx-parent-01" } }),
+        get: vi.fn().mockResolvedValue({ data: { parentID: parentSid } }),
       },
     }
     const plugin = await AutopilotPlugin({ client: mockClient })
 
     // Parent session
-    const parentMsg = { sessionID: "idx-parent-01", agent: "pilot", variant: undefined }
+    const parentMsg = { sessionID: parentSid, agent: "pilot", variant: undefined }
     await (plugin as any)["chat.message"](parentMsg, {})
     const parentState = getState()
     expect(parentState?.active).toBe(true)
 
     // Write marker in parent
-    const markerPath = path.join(parentState!.snapshotPath, TEST_PROJECT, "fork-check.txt")
+    const markerPath = path.join(parentState!.snapshotPath, TEST_PROJECT.slice(1), "fork-check.txt")
     mkdirSync(path.dirname(markerPath), { recursive: true })
     writeFileSync(markerPath, "parent-data")
 
     // Child session (fork)
-    setSession("idx-child-01")
-    const childMsg = { sessionID: "idx-child-01", agent: "pilot", variant: "fork" }
+    setSession(childSid)
+    const childMsg = { sessionID: childSid, agent: "pilot", variant: "fork" }
     await (plugin as any)["chat.message"](childMsg, {})
 
     // Verify mock was called
-    expect(mockClient.session.get).toHaveBeenCalledWith({ path: { id: "idx-child-01" } })
+    expect(mockClient.session.get).toHaveBeenCalledWith({ path: { id: childSid } })
 
     // Verify child inherited parent's data
     const childState = getState()
     expect(childState?.active).toBe(true)
-    expect(existsSync(path.join(childState!.snapshotPath, TEST_PROJECT, "fork-check.txt"))).toBe(true)
+    expect(existsSync(path.join(childState!.snapshotPath, TEST_PROJECT.slice(1), "fork-check.txt"))).toBe(true)
   })
 
   it("falls back to root when fork detection fails", async () => {
@@ -96,7 +104,7 @@ describe("index.ts — fork inheritance", () => {
       },
     }
     const plugin = await AutopilotPlugin({ client: mockClient })
-    const msg = { sessionID: "idx-fork-fail", agent: "pilot", variant: "fork" }
+    const msg = { sessionID: makeSid("idx-fork-fail"), agent: "pilot", variant: "fork" }
     await (plugin as any)["chat.message"](msg, {})
     const st = getState()
     expect(st?.active).toBe(true)
@@ -107,7 +115,7 @@ describe("index.ts — fork inheritance", () => {
 describe("index.ts — compaction.autocontinue", () => {
   it("enables autocontinue when autopilot is active", async () => {
     const plugin = await AutopilotPlugin({ client: {} as any })
-    const msg = { sessionID: "idx-compact-01", agent: "pilot", variant: undefined }
+    const msg = { sessionID: makeSid("idx-compact"), agent: "pilot", variant: undefined }
     await (plugin as any)["chat.message"](msg, {})
 
     const output = { enabled: false }

@@ -1,11 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { create, deactivate, discard, getState, setSession, toSandboxPath, wrapNsenterCommand, discardAll, maskPaths, setBypassPrefixes } from "../src/sandbox.js"
-import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "fs"
-import { execFileSync, execSync } from "child_process"
+import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync, mkdtempSync } from "fs"
+import { execSync } from "child_process"
 import * as path from "path"
+import * as os from "os"
 
-const TEST_SID = "test-001"
-const TEST_PROJECT = "/root/oc-ap-test"
+let TEST_SID = ""
+let TEST_PROJECT = ""
+
+function sleepMs(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
 
 function waitForPidExit(pid: number): void {
   for (let i = 0; i < 20; i++) {
@@ -14,15 +19,19 @@ function waitForPidExit(pid: number): void {
     } catch {
       return
     }
-    try { execFileSync("sleep", ["0.05"], { timeout: 200 }) } catch {}
+    sleepMs(50)
   }
+}
+
+function makeSid(): string {
+  return `test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
 }
 
 beforeEach(() => {
   discardAll()
+  TEST_SID = makeSid()
   setSession(TEST_SID)
-  if (existsSync(TEST_PROJECT)) rmSync(TEST_PROJECT, { recursive: true, force: true })
-  mkdirSync(TEST_PROJECT, { recursive: true })
+  TEST_PROJECT = mkdtempSync(path.join(os.tmpdir(), "oc-ap-test-"))
 })
 
 afterEach(() => {
@@ -62,7 +71,7 @@ describe("btrfs snapshot sandbox", () => {
 
   it("snapshot writes are COW-isolated", () => {
     const s = create(TEST_PROJECT)
-    const p = path.join(s.snapshotPath, "root/oc-ap-test", "cow.txt")
+    const p = path.join(s.snapshotPath, TEST_PROJECT.slice(1), "cow.txt")
     mkdirSync(path.dirname(p), { recursive: true })
     writeFileSync(p, "cow-write")
     expect(existsSync(path.join(TEST_PROJECT, "cow.txt"))).toBe(false)

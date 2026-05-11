@@ -1,0 +1,5 @@
+{
+  "DEFAULT_SNAPSHOT_DIR": "/dev/shm/oc-btrfs",
+  "SNAPSHOT_PREFIX": "@ap-",
+  "SNAPSHOT_NAME_PATTERN": "^@ap-[a-zA-Z0-9_-]+$"
+}

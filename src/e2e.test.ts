@@ -1,16 +1,26 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { create, discardAll, setSession, wrapNsenterCommand, getState, saveOriginalArgs, restoreOriginalArgs } from "../src/sandbox.js"
+import { mkdtempSync, rmSync } from "fs"
+import * as path from "path"
+import * as os from "os"
 
-const TEST_SID = "e2e-001"
-const TEST_PROJECT = "/tmp/oc-ap-e2e"
+let TEST_SID = ""
+let TEST_PROJECT = ""
+
+function makeSid(): string {
+  return `e2e-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+}
 
 beforeEach(() => {
   discardAll()
+  TEST_SID = makeSid()
   setSession(TEST_SID)
+  TEST_PROJECT = mkdtempSync(path.join(os.tmpdir(), "oc-ap-e2e-"))
 })
 
 afterEach(() => {
   discardAll()
+  try { rmSync(TEST_PROJECT, { recursive: true, force: true }) } catch {}
 })
 
 describe("e2e — wrapNsenterCommand", () => {

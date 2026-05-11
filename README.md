@@ -1,5 +1,7 @@
 # opencode-autopilot
 
+> **Platform Requirement: Linux/WSL only** — This plugin requires Linux with btrfs filesystem, bubblewrap, and root privileges. It will not work on macOS, Windows(native), or Linux/WSL without btrfs.
+
 OpenCode **自动巡航模式** — Tab 切换到 Pilot agent 即进入全自主 AI 编程沙箱。
 
 ```
