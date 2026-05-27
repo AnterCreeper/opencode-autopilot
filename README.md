@@ -95,7 +95,7 @@ npm run build
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `AUTOPILOT_SNAPSHOT_DIR` | `/dev/shm/oc-btrfs` | snapshot 存储目录 |
+| `AUTOPILOT_SNAPSHOT_DIR` | `/run/autopilot/snapshots` | snapshot 存储目录 |
 | `AUTOPILOT_DEBUG` | `0` | 设为 `1` 显示原始 snapshot 路径（调试用） |
 | `AUTOPILOT_BYPASS_PREFIXES` | `/root/.opencode/` | 逗号分隔，bwrap --bind 直通宿主 |
 | `AUTOPILOT_BWRAP_FLAGS` | `--unshare-pid` | 完整覆盖 bwrap flags；可通过不包含 `--unshare-pid` 来关闭 PID 隔离 |

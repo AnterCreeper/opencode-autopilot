@@ -140,7 +140,7 @@ OFF ──Tab→ Pilot──→ ON
 
 ```bash
 # snapshot 存储目录
-export AUTOPILOT_SNAPSHOT_DIR=/dev/shm/oc-btrfs
+export AUTOPILOT_SNAPSHOT_DIR=/run/autopilot/snapshots
 
 # bypass 白名单（逗号分隔）—— bwrap --bind 直通宿主机
 export AUTOPILOT_BYPASS_PREFIXES=/root/.opencode/
