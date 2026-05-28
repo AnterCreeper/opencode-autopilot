@@ -12,11 +12,15 @@
  */
 
 import { execFileSync } from "child_process"
-import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "fs"
+import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync, mkdtempSync } from "fs"
 import * as path from "path"
+import * as os from "os"
+import constants from "../src/constants.json" with { type: "json" }
 
-const SNAPSHOT_DIR = process.env.AUTOPILOT_SNAPSHOT_DIR || "/dev/shm/oc-btrfs"
-const TEST_DIR = "/tmp/oc-ap-deploy-test"
+const { DEFAULT_SNAPSHOT_DIR } = constants
+
+const SNAPSHOT_DIR = process.env.AUTOPILOT_SNAPSHOT_DIR || DEFAULT_SNAPSHOT_DIR
+const TEST_DIR = mkdtempSync(path.join(os.tmpdir(), "oc-ap-deploy-test-"))
 
 function log(step, status, detail = "") {
   const icon = status === "PASS" ? "✅" : status === "FAIL" ? "❌" : "⏳"

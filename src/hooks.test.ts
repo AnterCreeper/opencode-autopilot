@@ -1,17 +1,22 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { create, discardAll, getState, setSession, setBypassPrefixes } from "../src/sandbox.js"
 import { onToolExecuteBefore, onToolExecuteAfter, onShellEnv, onSystemTransform } from "../src/hooks.js"
-import { existsSync, mkdirSync, writeFileSync, rmSync } from "fs"
+import { existsSync, mkdirSync, writeFileSync, rmSync, mkdtempSync } from "fs"
 import * as path from "path"
+import * as os from "os"
 
-const TEST_SID = "htest-01"
-const TEST_PROJECT = "/tmp/oc-ap-hooks-test"
+let TEST_SID = ""
+let TEST_PROJECT = ""
+
+function makeSid(): string {
+  return `htest-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+}
 
 beforeEach(() => {
   discardAll()
+  TEST_SID = makeSid()
   setSession(TEST_SID)
-  if (existsSync(TEST_PROJECT)) rmSync(TEST_PROJECT, { recursive: true, force: true })
-  mkdirSync(TEST_PROJECT, { recursive: true })
+  TEST_PROJECT = mkdtempSync(path.join(os.tmpdir(), "oc-ap-hooks-test-"))
 })
 
 afterEach(() => {
@@ -232,7 +237,7 @@ describe("hooks — system prompt deduplication", () => {
   })
 
   it("injects fork-specific warning for forked sessions", async () => {
-    const forkSid = "fork-prompt-01"
+    const forkSid = `fork-prompt-${Date.now()}`
     setSession(forkSid)
     create(TEST_PROJECT, "some-parent")
     const out = { system: [] }
@@ -243,7 +248,7 @@ describe("hooks — system prompt deduplication", () => {
   })
 
   it("re-injects when state changes", async () => {
-    const sid2 = "sys-dedup-02"
+    const sid2 = `sys-dedup-${Date.now()}`
     setSession(sid2)
     create(TEST_PROJECT)
     const outActive = { system: [] }
@@ -279,14 +284,14 @@ describe("hooks — system prompt LRU eviction", () => {
   it("evicts oldest entries when exceeding limit", async () => {
     // Fill beyond small limit — should silently drop oldest
     for (let i = 0; i < 7; i++) {
-      const sid = `lru-${i}`
+      const sid = `lru-${Date.now()}-${i}`
       setSession(sid)
       create(TEST_PROJECT)
       const out = { system: [] }
       await onSystemTransform({ sessionID: sid }, out)
     }
     // Should not throw; oldest entries may have been evicted
-    const sidLast = "lru-last"
+    const sidLast = `lru-last-${Date.now()}`
     setSession(sidLast)
     create(TEST_PROJECT)
     const outLast = { system: [] }
@@ -297,8 +302,8 @@ describe("hooks — system prompt LRU eviction", () => {
 
 describe("hooks — fork inheritance", () => {
   it("child snapshot inherits from parent", async () => {
-    const parentSid = "fork-parent-01"
-    const childSid = "fork-child-01"
+    const parentSid = `fork-parent-${Date.now()}`
+    const childSid = `fork-child-${Date.now()}`
 
     // Parent session
     setSession(parentSid)
@@ -306,7 +311,7 @@ describe("hooks — fork inheritance", () => {
     expect(parent.active).toBe(true)
 
     // Write something in parent snapshot
-    const markerPath = path.join(parent.snapshotPath, TEST_PROJECT, "fork-marker.txt")
+    const markerPath = path.join(parent.snapshotPath, TEST_PROJECT.slice(1), "fork-marker.txt")
     mkdirSync(path.dirname(markerPath), { recursive: true })
     writeFileSync(markerPath, "parent")
 
@@ -315,11 +320,11 @@ describe("hooks — fork inheritance", () => {
     const child = create(TEST_PROJECT, parentSid)
     expect(child.active).toBe(true)
     // Child should see parent's file
-    expect(existsSync(path.join(child.snapshotPath, TEST_PROJECT, "fork-marker.txt"))).toBe(true)
+    expect(existsSync(path.join(child.snapshotPath, TEST_PROJECT.slice(1), "fork-marker.txt"))).toBe(true)
 
     // Child's modification should not affect parent
-    writeFileSync(path.join(child.snapshotPath, TEST_PROJECT, "child-only.txt"), "child")
-    expect(existsSync(path.join(parent.snapshotPath, TEST_PROJECT, "child-only.txt"))).toBe(false)
+    writeFileSync(path.join(child.snapshotPath, TEST_PROJECT.slice(1), "child-only.txt"), "child")
+    expect(existsSync(path.join(parent.snapshotPath, TEST_PROJECT.slice(1), "child-only.txt"))).toBe(false)
 
     discardAll()
   })

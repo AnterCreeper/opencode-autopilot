@@ -1,15 +1,11 @@
 import { create, getAgent, getState, setSession, toSandboxPath, wrapNsenterCommand, maskPaths, saveOriginalArgs, restoreOriginalArgs, ensureSandboxHealthy } from "./sandbox.js"
-
-function isDebugMode(): boolean {
-  return process.env.AUTOPILOT_DEBUG === "1"
-}
+import { getDebugMode, getMaxSystemPromptState } from "./config.js"
 
 // Track last injected state per session to avoid duplicate system prompts
 const systemPromptState = new Map<string, boolean>()
-const MAX_SYSTEM_PROMPT_STATE = parseInt(process.env.AUTOPILOT_MAX_SYSTEM_PROMPT_STATE || "1000", 10)
 
 function setSystemPromptState(sessionId: string, active: boolean): void {
-  if (!systemPromptState.has(sessionId) && systemPromptState.size >= MAX_SYSTEM_PROMPT_STATE) {
+  if (!systemPromptState.has(sessionId) && systemPromptState.size >= getMaxSystemPromptState()) {
     const firstKey = systemPromptState.keys().next().value
     if (firstKey) systemPromptState.delete(firstKey)
   }
@@ -49,7 +45,7 @@ export async function onToolExecuteAfter(
   // Restore original args so transcript shows clean paths, not snapshot paths
   restoreOriginalArgs(input.callID, input.args)
 
-  if (isDebugMode()) {
+  if (getDebugMode()) {
     output.output = `[AUTOPILOT DEBUG] Raw command:\n${JSON.stringify(input.args, null, 2)}\n---\n` + output.output
     return
   }

@@ -17,8 +17,11 @@ import { execFileSync } from "child_process"
 import { mkdirSync } from "fs"
 import * as readline from "readline"
 import * as path from "path"
+import constants from "../src/constants.json" with { type: "json" }
 
-const BASE_PATH = safeMountPath(process.env.AUTOPILOT_SNAPSHOT_DIR || "/dev/shm/oc-btrfs")
+const { DEFAULT_SNAPSHOT_DIR, SNAPSHOT_PREFIX, SNAPSHOT_NAME_PATTERN } = constants
+
+const BASE_PATH = safeMountPath(process.env.AUTOPILOT_SNAPSHOT_DIR || DEFAULT_SNAPSHOT_DIR)
 
 function safeMountPath(mountPath) {
   if (!path.isAbsolute(mountPath) || mountPath.includes("\0")) {
@@ -40,7 +43,7 @@ function ensureMounted() {
 
 function parseSnapshotName(fullPath) {
   const name = fullPath.split("/").pop()
-  if (!/^@ap-[a-zA-Z0-9_-]+$/.test(name || "")) return undefined
+  if (!new RegExp(SNAPSHOT_NAME_PATTERN).test(name || "")) return undefined
   return name
 }
 
@@ -210,7 +213,7 @@ Autopilot Snapshot Cleanup
   node scripts/cleanup.mjs --help           显示此帮助
 
 环境变量:
-  AUTOPILOT_SNAPSHOT_DIR    snapshot 目录 (默认: /dev/shm/oc-btrfs)
+  AUTOPILOT_SNAPSHOT_DIR    snapshot 目录 (默认: ${DEFAULT_SNAPSHOT_DIR})
 `)
     return
   }
